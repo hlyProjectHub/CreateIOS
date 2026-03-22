@@ -3,6 +3,8 @@
 # 初始化完整 iOS App 工程（单 Target，XcodeGen 生成 .xcodeproj）。
 # 依赖: Xcode 命令行工具 + Homebrew 安装的 xcodegen
 #   brew install xcodegen
+# 生成后（可选，便于 Cursor/VS Code 跳转）: brew install xcode-build-server
+# 跳过 IDE 准备: IOSPC_SKIP_IDE_SETUP=1 ./create_ios_project.sh ...
 #
 # 用法:
 #   ./create_ios_project.sh MyApp
@@ -37,6 +39,8 @@ usage() {
   $SCRIPT_NAME HelloApp com.acme.hello --language objc --ios 13.0
 
 需先安装: brew install xcodegen
+可选（Cursor/VS Code 跳转）: brew install xcode-build-server
+跳过自动生成 buildServer / 首次构建: IOSPC_SKIP_IDE_SETUP=1 $SCRIPT_NAME ...
 EOF
   exit 1
 }
@@ -335,11 +339,54 @@ JSON
 
 pushd "$ROOT" >/dev/null
 xcodegen generate
+
+# 命令行构建产物（与 README 中 xcodebuild -resultBundlePath 一致）
+if [[ -f .gitignore ]]; then
+  grep -qxF '.bundle/' .gitignore 2>/dev/null || echo '.bundle/' >> .gitignore
+else
+  echo '.bundle/' > .gitignore
+fi
+
+# --- Cursor / VS Code：buildServer.json + 首次构建（SourceKit-LSP）---
+if [[ "${IOSPC_SKIP_IDE_SETUP:-}" != "1" ]]; then
+  if command -v xcode-build-server >/dev/null 2>&1; then
+    if xcode-build-server config -project "${PROJECT_NAME}.xcodeproj" -scheme "$PROJECT_NAME"; then
+      echo "已生成 buildServer.json（供 Cursor/VS Code Swift 扩展与 SourceKit 使用）。"
+    else
+      echo "提示: xcode-build-server config 未成功，可稍后在本目录手动执行:" >&2
+      echo "  xcode-build-server config -project ${PROJECT_NAME}.xcodeproj -scheme $PROJECT_NAME" >&2
+    fi
+  else
+    echo "提示: 未安装 xcode-build-server，Cursor/VS Code 内跳转定义前请执行: brew install xcode-build-server" >&2
+    echo "     然后在 \"$ROOT\" 下执行: xcode-build-server config -project ${PROJECT_NAME}.xcodeproj -scheme $PROJECT_NAME" >&2
+  fi
+
+  if command -v xcodebuild >/dev/null 2>&1; then
+    rm -rf .bundle
+    if xcodebuild -quiet \
+      -project "${PROJECT_NAME}.xcodeproj" \
+      -scheme "$PROJECT_NAME" \
+      -destination 'generic/platform=iOS Simulator' \
+      -resultBundlePath .bundle \
+      build; then
+      echo "已执行首次 xcodebuild（.bundle/），便于编辑器解析 Swift 工程。"
+    else
+      echo "提示: 命令行首次构建未成功。请在 Xcode 中打开工程并执行 Product → Build，再在 Cursor/VS Code 中 Reload Window。" >&2
+    fi
+  else
+    echo "提示: 未找到 xcodebuild，请用 Xcode 完成至少一次 Build 后再在编辑器中使用跳转。" >&2
+  fi
+else
+  echo "已跳过 IDE 准备（IOSPC_SKIP_IDE_SETUP=1）。"
+fi
+
 popd >/dev/null
 
 echo ""
 echo "已创建: $ROOT"
 echo "语言: $LANGUAGE | 界面: $UI_FRAMEWORK | 最低 iOS: $IOS_MIN"
 echo "打开工程: open \"$ROOT/$PROJECT_NAME.xcodeproj\""
+echo ""
+echo "Cursor/VS Code: 请「打开文件夹」选择 \"$ROOT\"（与 .xcodeproj 同级），然后 Reload Window 或 Swift: Restart SourceKit-LSP。"
 echo ""
 echo "说明: 请在 Xcode 中为 AppIcon 添加图标后再上架。"

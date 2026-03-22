@@ -11,7 +11,15 @@
 brew install xcodegen
 ```
 
-脚本会调用 `xcodegen generate`，根据同目录下的 `project.yml` 生成标准 Xcode 工程。
+- **可选（推荐）**：若在 **Cursor / VS Code** 中需要生成后尽快支持 **跳转定义**，请安装 **[xcode-build-server](https://github.com/SolaWing/xcode-build-server)**：
+
+```bash
+brew install xcode-build-server
+```
+
+未安装时，脚本仍会创建工程，并提示你在工程目录下手动执行 `xcode-build-server config ...`。
+
+脚本会调用 `xcodegen generate`，根据同目录下的 `project.yml` 生成标准 Xcode 工程；随后会尝试写入 **`.gitignore`（忽略 `.bundle/`）**、生成 **`buildServer.json`**、并执行 **一次**面向 iOS 模拟器的 **`xcodebuild` 构建**（可用环境变量 **`IOSPC_SKIP_IDE_SETUP=1`** 跳过上述 IDE 相关步骤）。
 
 ## 文件说明
 
@@ -208,12 +216,66 @@ open MyApp/MyApp.xcodeproj
 
 将 `MyApp` 换成你的项目名；若指定了输出目录，路径为 `<输出目录>/<项目名>/<项目名>.xcodeproj`。
 
+**已自动完成的 IDE 相关步骤（默认）：** 在工程根目录（与 `.xcodeproj` 同级）添加 **`.bundle/`** 到 `.gitignore`、在已安装 **xcode-build-server** 时生成 **`buildServer.json`**、在存在 **`xcodebuild`** 时尝试 **首次构建**（产出 `.bundle/`）。之后在 Cursor / VS Code 中 **打开该工程根文件夹**，执行 **Reload Window** 或 **Swift: Restart SourceKit-LSP** 即可使用跳转。若需跳过（例如 CI 无 Xcode），可在运行 `iospc` / `create_ios_project.sh` 前设置 **`IOSPC_SKIP_IDE_SETUP=1`**。
+
 ## 工程约定
 
 - **语言与界面：** 由命令行选项决定。Swift + SwiftUI 时为 `@main` App 与 `ContentView`；Swift + UIKit 时为 `AppDelegate` + `ViewController`（无 Storyboard）；Objective-C 为经典 UIKit 入口与视图控制器。
 - **最低系统：** 默认 iOS 15.0；可通过 `-m` / `--ios` 指定。生成后仍可在 `project.yml` 中修改 `deploymentTarget`，再执行 `xcodegen generate`。
 - **Info.plist：** 使用 Xcode 推荐的自动生成项（`GENERATE_INFOPLIST_FILE` 等）；SwiftUI 会启用 Scene Manifest 相关项，纯 UIKit AppDelegate 模板会关闭 Scene Manifest 生成。
 - **AppIcon：** 脚本仅生成空占位，**上架或部分真机校验前**请在 Xcode 的 Assets 中补全图标。
+
+## 在 Cursor 中使用 Swift「跳到定义」（Xcode 工程）
+
+用 `iospc` / `create_ios_project.sh` 生成的是标准 **Xcode 工程**。若在 **Cursor**（或 VS Code）里 **F12 / Cmd+点击** 无法跳到 `ContentView` 等定义，通常需要让 **SourceKit-LSP** 通过 **xcode-build-server** 拿到与 Xcode 一致的编译信息。
+
+**由本仓库脚本新建的项目：** 生成结束时已尽量自动完成 **`.gitignore`（`.bundle/`）**、**`buildServer.json`**（需本机已安装 `xcode-build-server`）以及 **一次命令行构建**（需 `xcodebuild` 可用）。你仍需在编辑器中 **打开工程根目录** 并 **Reload Window** / **Restart SourceKit-LSP**。若当时未安装 `xcode-build-server` 或构建失败，请按下面「手动补做」步骤操作。
+
+### 一次性准备（每台电脑）
+
+1. 安装 **Xcode**，`xcode-select` 指向当前 Xcode。
+2. 安装 **xcode-build-server**：`brew install xcode-build-server`
+3. 在 Cursor 中安装 **Swift** 扩展（扩展市场搜索 `Swift`，建议只保留 **swiftlang** 等一套官方语言支持，避免多个 Swift 扩展同时启用导致冲突）。
+
+### 每个新 Xcode 项目
+
+1. **用 Xcode 建好工程**（或用本脚本生成），确保能 **Build** 成功。本脚本生成时一般会已尝试命令行构建一次。
+2. **Cursor → Open Folder**：打开包含 `.xcodeproj` 的**工程根目录**（与 `.xcodeproj` **同级**）。若工程在父目录下还有一层（例如 `create_ios/MyApp/`），请打开 **`MyApp` 这一层**，不要只打开最外层仓库根目录。
+3. **若工程根目录下还没有 `buildServer.json`**，在终端进入该根目录后执行（按实际工程名替换）：
+
+   ```bash
+   xcode-build-server config -project HelloApp.xcodeproj -scheme HelloApp
+   ```
+
+   若使用 `.xcworkspace`：
+
+   ```bash
+   xcode-build-server config -workspace YourApp.xcworkspace -scheme YourScheme
+   ```
+
+4. **若尚未完整构建过**，任选其一：
+   - Xcode：**Product → Build**
+   - 或命令行（iOS 示例）：
+
+     ```bash
+     rm -rf .bundle
+     xcodebuild -project HelloApp.xcodeproj -scheme HelloApp \
+       -destination 'generic/platform=iOS Simulator' \
+       -resultBundlePath .bundle build
+     ```
+
+5. Cursor：`Cmd+Shift+P` → **Developer: Reload Window**（或 **Swift: Restart SourceKit-LSP**）。
+6. 使用 **F12** 或 **Cmd+点击** 跳转定义。
+
+### 建议
+
+- 在 `.gitignore` 中加入 `.bundle/`。
+- 增删文件、改 Target/Scheme/SDK 后：再 **Build** 一次，必要时 **重载窗口**。
+- 可选安装 **SweetPad** 等扩展，便于在编辑器内选择 Scheme、触发构建并与 Xcode 工程配合。
+
+### Swift Package（含 `Package.swift`）
+
+一般**无需** `xcode-build-server`；打开含 `Package.swift` 的文件夹，用 Swift 扩展构建后即可跳转。
 
 ## 常见问题
 
@@ -228,6 +290,12 @@ open MyApp/MyApp.xcodeproj
 - **提示「未找到 xcodegen」：** 先执行 `brew install xcodegen`，确认 `which xcodegen` 有路径。
 - **提示「已存在路径」：** 同名目录已存在，请换项目名或删除/移动旧目录后再运行。
 - **提示 SwiftUI 与 Objective-C 冲突：** 请改用 `--language swift`，或改用 `--ui uikit`。
+- **不想在创建时跑 xcode-build-server / xcodebuild（如 CI）：** 设置 `IOSPC_SKIP_IDE_SETUP=1` 再运行 `iospc` / `create_ios_project.sh`。
+- **创建时提示未安装 xcode-build-server 或首次构建失败：** 不影响工程本身；安装 `brew install xcode-build-server` 后在本工程根目录执行上文「在 Cursor 中使用 Swift」中的 `config` 与 `xcodebuild`，或在 Xcode 中 Build 一次即可。
+
+**在 Cursor / VS Code 中编辑**
+
+- **F12 / Cmd+点击无法跳到定义：** 按上文 **「在 Cursor 中使用 Swift「跳到定义」（Xcode 工程）」** 配置 `xcode-build-server` 与工程根目录；并避免同时启用多个 Swift 语言扩展。
 
 ## 许可
 
